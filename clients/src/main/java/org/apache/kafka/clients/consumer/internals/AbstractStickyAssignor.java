@@ -100,7 +100,7 @@ public abstract class AbstractStickyAssignor extends AbstractPartitionAssignor {
         RackInfo rackInfo = new RackInfo(allPartitions, subscriptions);
 
         AbstractAssignmentBuilder assignmentBuilder;
-        if (allSubscriptionsEqual(partitionsPerTopic.keySet(), subscriptions, consumerToOwnedPartitions, partitionsWithMultiplePreviousOwners)) {
+        if (allSubscriptionsEqual(partitionsPerTopic, subscriptions, consumerToOwnedPartitions, partitionsWithMultiplePreviousOwners)) {
             log.debug("Detected that all consumers were subscribed to same set of topics, invoking the "
                           + "optimized assignment algorithm");
             partitionsTransferringOwnership = new HashMap<>();
@@ -130,7 +130,7 @@ public abstract class AbstractStickyAssignor extends AbstractPartitionAssignor {
      * {@code consumerToOwnedPartitions} with each consumer's previously owned and still-subscribed partitions,
      * and the {@code partitionsWithMultiplePreviousOwners} with any partitions claimed by multiple previous owners
      */
-    private boolean allSubscriptionsEqual(Set<String> allTopics,
+    private boolean allSubscriptionsEqual(Map<String, List<PartitionInfo>> partitionsPerTopic,
                                           Map<String, Subscription> subscriptions,
                                           Map<String, List<TopicPartition>> consumerToOwnedPartitions,
                                           Set<TopicPartition> partitionsWithMultiplePreviousOwners) {
@@ -164,7 +164,11 @@ public abstract class AbstractStickyAssignor extends AbstractPartitionAssignor {
             // the member has a valid generation, so we can consider its owned partitions if it has the highest
             // generation amongst
             for (final TopicPartition tp : memberData.partitions) {
-                if (allTopics.contains(tp.topic())) {
+                // check that the owned partition still exists in the metadata: the topic must be known to the
+                // leader and the partition number must be within the topic's current partition count, which may
+                // have shrunk if the topic was deleted and re-created with fewer partitions
+                final List<PartitionInfo> partitionInfos = partitionsPerTopic.get(tp.topic());
+                if (partitionInfos != null && tp.partition() < partitionInfos.size()) {
                     String otherConsumer = allPreviousPartitionsToOwner.get(tp);
                     if (otherConsumer == null) {
                         // this partition is not owned by other consumer in the same generation
@@ -204,6 +208,10 @@ public abstract class AbstractStickyAssignor extends AbstractPartitionAssignor {
                                     otherMemberGeneration);
                         }
                     }
+                } else if (partitionInfos != null) {
+                    log.warn("Consumer {} in generation {} reported owning partition {} but topic {} only has {} "
+                            + "partitions in the current metadata. The stale owned partition is ignored.",
+                        consumer, memberGeneration, tp, tp.topic(), partitionInfos.size());
                 }
             }
         }

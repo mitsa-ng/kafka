@@ -318,6 +318,43 @@ public abstract class AbstractStickyAssignorTest {
     }
 
     /**
+     * This unit test is testing the case that a member reports owning a partition that no longer exists in the
+     * metadata, eg after the topic was deleted and re-created with fewer partitions
+     */
+    @ParameterizedTest(name = TEST_NAME_WITH_RACK_CONFIG)
+    @EnumSource(RackConfig.class)
+    public void testOwnedPartitionNotInMetadataAnymore(RackConfig rackConfig) {
+        initializeRacks(rackConfig);
+        Map<String, List<PartitionInfo>> partitionsPerTopic = new HashMap<>();
+        partitionsPerTopic.put(topic1, partitionInfos(topic1, 2));
+        partitionsPerTopic.put(topic2, partitionInfos(topic2, 2));
+
+        List<String> subscribedTopics = topics(topic1, topic2);
+
+        // both members report one valid owned partition and one stale partition that no longer exists
+        subscriptions.put(consumer1,
+            buildSubscriptionV2Above(subscribedTopics, partitions(tp(topic1, 0), tp(topic2, 2)), generationId, 0));
+        subscriptions.put(consumer2,
+            buildSubscriptionV2Above(subscribedTopics, partitions(tp(topic1, 1), tp(topic1, 2)), generationId, 1));
+
+        Map<String, List<TopicPartition>> assignment = assignor.assignPartitions(partitionsPerTopic, subscriptions);
+
+        // every existing partition must be assigned exactly once, and no stale partition may be assigned
+        final List<TopicPartition> allAssignedPartitions = new ArrayList<>();
+        assignment.values().forEach(allAssignedPartitions::addAll);
+        assertEquals(4, allAssignedPartitions.size());
+        assertEquals(new HashSet<>(partitions(tp(topic1, 0), tp(topic1, 1), tp(topic2, 0), tp(topic2, 1))),
+            new HashSet<>(allAssignedPartitions));
+
+        // the valid owned partitions must be retained
+        assertTrue(assignment.get(consumer1).contains(tp(topic1, 0)));
+        assertTrue(assignment.get(consumer2).contains(tp(topic1, 1)));
+
+        verifyValidityAndBalance(subscriptions, assignment, partitionsPerTopic);
+        assertTrue(isFullyBalanced(assignment));
+    }
+
+    /**
      * This unit test is testing consumers owned maxQuota partitions are more than numExpectedMaxCapacityMembers situation
      */
     @ParameterizedTest(name = TEST_NAME_WITH_RACK_CONFIG)
